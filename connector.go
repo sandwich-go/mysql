@@ -11,6 +11,7 @@ package mysql
 import (
 	"context"
 	"database/sql/driver"
+	"github.com/opentracing/opentracing-go"
 	"net"
 )
 
@@ -31,6 +32,10 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		cfg:              c.cfg,
 	}
 	mc.parseTime = mc.cfg.ParseTime
+
+	var spanChild opentracing.Span
+	ctx, spanChild = mc.beginTracing(ctx, "conn.Connect")
+	defer mc.finishTracing(spanChild)
 
 	// Connect to Server
 	dialsLock.RLock()
@@ -118,7 +123,7 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		mc.maxAllowedPacket = mc.cfg.MaxAllowedPacket
 	} else {
 		// Get max allowed packet size
-		maxap, err := mc.getSystemVar("max_allowed_packet")
+		maxap, err := mc.getSystemVar(ctx, "max_allowed_packet")
 		if err != nil {
 			mc.Close()
 			return nil, err
@@ -130,7 +135,7 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	}
 
 	// Handle DSN Params
-	err = mc.handleParams()
+	err = mc.handleParams(ctx)
 	if err != nil {
 		mc.Close()
 		return nil, err

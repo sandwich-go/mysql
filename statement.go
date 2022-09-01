@@ -9,9 +9,11 @@
 package mysql
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"github.com/opentracing/opentracing-go"
 	"io"
 	"reflect"
 )
@@ -50,10 +52,17 @@ func (stmt *mysqlStmt) CheckNamedValue(nv *driver.NamedValue) (err error) {
 }
 
 func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
+	return stmt.exec(context.Background(), args)
+}
+
+func (stmt *mysqlStmt) exec(ctx context.Context, args []driver.Value) (driver.Result, error) {
 	if stmt.mc.closed.Load() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
+	var spanChild opentracing.Span
+	ctx, spanChild = stmt.mc.beginTracing(ctx, "stmt.exec")
+	defer stmt.mc.finishTracing(spanChild)
 	// Send command
 	err := stmt.writeExecutePacket(args)
 	if err != nil {
@@ -94,14 +103,17 @@ func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
 }
 
 func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return stmt.query(args)
+	return stmt.query(context.Background(), args)
 }
 
-func (stmt *mysqlStmt) query(args []driver.Value) (*binaryRows, error) {
+func (stmt *mysqlStmt) query(ctx context.Context, args []driver.Value) (*binaryRows, error) {
 	if stmt.mc.closed.Load() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
+	var spanChild opentracing.Span
+	ctx, spanChild = stmt.mc.beginTracing(ctx, "stmt.query")
+	defer stmt.mc.finishTracing(spanChild)
 	// Send command
 	err := stmt.writeExecutePacket(args)
 	if err != nil {
