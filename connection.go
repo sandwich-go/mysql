@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"github.com/opentracing/opentracing-go"
 	"io"
 	"net"
@@ -359,7 +360,13 @@ func (mc *mysqlConn) interExec(ctx context.Context, query string, args []driver.
 	mc.affectedRows = 0
 	mc.insertId = 0
 
+	ctx, spanChild = mc.beginTracing(ctx, "conn.exec")
 	err := mc.exec(ctx, query)
+	ctime := time.Now().UnixNano()
+	spanChild.SetTag("server_send_time", fmt.Sprintf("%d", mc.affectedRows))
+	spanChild.SetTag("client_rev_time", fmt.Sprintf("%d", ctime))
+	spanChild.SetTag("duration_time", fmt.Sprintf("%d", ctime-int64(mc.affectedRows)))
+	mc.finishTracing(spanChild)
 	if err == nil {
 		return &mysqlResult{
 			affectedRows: int64(mc.affectedRows),
@@ -372,7 +379,7 @@ func (mc *mysqlConn) interExec(ctx context.Context, query string, args []driver.
 // Internal function to execute commands
 func (mc *mysqlConn) exec(ctx context.Context, query string) error {
 	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.exec")
+	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.inner")
 	defer mc.finishTracing(spanChild)
 
 	// Send command
