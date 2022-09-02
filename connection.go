@@ -376,29 +376,42 @@ func (mc *mysqlConn) exec(ctx context.Context, query string) error {
 	defer mc.finishTracing(spanChild)
 
 	// Send command
-	if err := mc.writeCommandPacketStr(comQuery, query); err != nil {
-		return mc.markBadConn(err)
+	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.writeCommandPacketStr")
+	err0 := mc.writeCommandPacketStr(comQuery, query)
+	mc.finishTracing(spanChild)
+	if err0 != nil {
+		return mc.markBadConn(err0)
 	}
 
-	// Read Result
+	// Read Result]
+	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.readResultSetHeaderPacket")
 	resLen, err := mc.readResultSetHeaderPacket()
+	mc.finishTracing(spanChild)
 	if err != nil {
 		return err
 	}
 
 	if resLen > 0 {
 		// columns
-		if err := mc.readUntilEOF(); err != nil {
+		ctx, spanChild = mc.beginTracing(ctx, "conn.exec.readColumns")
+		err = mc.readUntilEOF()
+		mc.finishTracing(spanChild)
+		if err != nil {
 			return err
 		}
 
 		// rows
-		if err := mc.readUntilEOF(); err != nil {
+		ctx, spanChild = mc.beginTracing(ctx, "conn.exec.readRows")
+		err = mc.readUntilEOF()
+		mc.finishTracing(spanChild)
+		if err != nil {
 			return err
 		}
 	}
-
-	return mc.discardResults()
+	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.discardResults")
+	err = mc.discardResults()
+	mc.finishTracing(spanChild)
+	return err
 }
 
 func (mc *mysqlConn) Query(query string, args []driver.Value) (driver.Rows, error) {
