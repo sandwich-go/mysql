@@ -363,9 +363,11 @@ func (mc *mysqlConn) interExec(ctx context.Context, query string, args []driver.
 	ctx, spanChild = mc.beginTracing(ctx, "conn.exec")
 	err := mc.exec(ctx, query)
 	ctime := time.Now().UnixNano()
-	spanChild.SetTag("server_send_time", fmt.Sprintf("%d", mc.affectedRows))
-	spanChild.SetTag("client_rev_time", fmt.Sprintf("%d", ctime))
-	spanChild.SetTag("duration_time", fmt.Sprintf("%d", ctime-int64(mc.affectedRows)))
+	if spanChild != nil {
+		spanChild.SetTag("server_send_time", fmt.Sprintf("%d", mc.affectedRows))
+		spanChild.SetTag("client_rev_time", fmt.Sprintf("%d", ctime))
+		spanChild.SetTag("duration_time", fmt.Sprintf("%d", ctime-int64(mc.affectedRows)))
+	}
 	mc.finishTracing(spanChild)
 	if err == nil {
 		return &mysqlResult{
