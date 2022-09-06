@@ -12,16 +12,26 @@ import (
 	"context"
 	"database/sql/driver"
 	"github.com/opentracing/opentracing-go"
+	"github.com/prometheus/client_golang/prometheus"
 	"net"
+	"time"
 )
 
 type connector struct {
-	cfg *Config // immutable private copy.
+	cfg           *Config // immutable private copy.
+	latencyMetric *prometheus.SummaryVec
+}
+
+func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
+	now := time.Now()
+	conn, err := c.connect(ctx)
+	c.latencyMetric.WithLabelValues().Observe(time.Since(now).Seconds())
+	return conn, err
 }
 
 // Connect implements driver.Connector interface.
 // Connect returns a connection to the database.
-func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
+func (c *connector) connect(ctx context.Context) (driver.Conn, error) {
 	var err error
 
 	// New mysqlConn
@@ -147,5 +157,5 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 // Driver implements driver.Connector interface.
 // Driver returns &MySQLDriver{}.
 func (c *connector) Driver() driver.Driver {
-	return &MySQLDriver{}
+	return &MySQLDriver{latencyMetric: c.latencyMetric}
 }
