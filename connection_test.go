@@ -147,7 +147,7 @@ func TestCleanCancel(t *testing.T) {
 			t.Errorf("expected context.Canceled, got %#v", err)
 		}
 
-		if mc.closed.Load() {
+		if mc.closed.IsSet() {
 			t.Error("expected mc is not closed, closed actually")
 		}
 

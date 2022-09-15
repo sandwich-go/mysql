@@ -11,27 +11,16 @@ package mysql
 import (
 	"context"
 	"database/sql/driver"
-	"github.com/opentracing/opentracing-go"
-	"github.com/prometheus/client_golang/prometheus"
 	"net"
-	"time"
 )
 
 type connector struct {
-	cfg           *Config // immutable private copy.
-	latencyMetric *prometheus.SummaryVec
-}
-
-func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
-	now := time.Now()
-	conn, err := c.connect(ctx)
-	c.latencyMetric.WithLabelValues().Observe(time.Since(now).Seconds())
-	return conn, err
+	cfg *Config // immutable private copy.
 }
 
 // Connect implements driver.Connector interface.
 // Connect returns a connection to the database.
-func (c *connector) connect(ctx context.Context) (driver.Conn, error) {
+func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	var err error
 
 	// New mysqlConn
@@ -42,10 +31,6 @@ func (c *connector) connect(ctx context.Context) (driver.Conn, error) {
 		cfg:              c.cfg,
 	}
 	mc.parseTime = mc.cfg.ParseTime
-
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.Connect")
-	defer mc.finishTracing(spanChild)
 
 	// Connect to Server
 	dialsLock.RLock()
@@ -133,7 +118,7 @@ func (c *connector) connect(ctx context.Context) (driver.Conn, error) {
 		mc.maxAllowedPacket = mc.cfg.MaxAllowedPacket
 	} else {
 		// Get max allowed packet size
-		maxap, err := mc.getSystemVar(ctx, "max_allowed_packet")
+		maxap, err := mc.getSystemVar("max_allowed_packet")
 		if err != nil {
 			mc.Close()
 			return nil, err
@@ -145,7 +130,7 @@ func (c *connector) connect(ctx context.Context) (driver.Conn, error) {
 	}
 
 	// Handle DSN Params
-	err = mc.handleParams(ctx)
+	err = mc.handleParams()
 	if err != nil {
 		mc.Close()
 		return nil, err
@@ -157,5 +142,5 @@ func (c *connector) connect(ctx context.Context) (driver.Conn, error) {
 // Driver implements driver.Connector interface.
 // Driver returns &MySQLDriver{}.
 func (c *connector) Driver() driver.Driver {
-	return &MySQLDriver{latencyMetric: c.latencyMetric}
+	return &MySQLDriver{}
 }

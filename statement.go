@@ -9,11 +9,9 @@
 package mysql
 
 import (
-	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"github.com/opentracing/opentracing-go"
 	"io"
 	"reflect"
 )
@@ -25,7 +23,7 @@ type mysqlStmt struct {
 }
 
 func (stmt *mysqlStmt) Close() error {
-	if stmt.mc == nil || stmt.mc.closed.Load() {
+	if stmt.mc == nil || stmt.mc.closed.IsSet() {
 		// driver.Stmt.Close can be called more than once, thus this function
 		// has to be idempotent.
 		// See also Issue #450 and golang/go#16019.
@@ -52,17 +50,10 @@ func (stmt *mysqlStmt) CheckNamedValue(nv *driver.NamedValue) (err error) {
 }
 
 func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
-	return stmt.exec(context.Background(), args)
-}
-
-func (stmt *mysqlStmt) exec(ctx context.Context, args []driver.Value) (driver.Result, error) {
-	if stmt.mc.closed.Load() {
+	if stmt.mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
-	var spanChild opentracing.Span
-	ctx, spanChild = stmt.mc.beginTracing(ctx, "stmt.exec")
-	defer stmt.mc.finishTracing(spanChild)
 	// Send command
 	err := stmt.writeExecutePacket(args)
 	if err != nil {
@@ -103,17 +94,14 @@ func (stmt *mysqlStmt) exec(ctx context.Context, args []driver.Value) (driver.Re
 }
 
 func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return stmt.query(context.Background(), args)
+	return stmt.query(args)
 }
 
-func (stmt *mysqlStmt) query(ctx context.Context, args []driver.Value) (*binaryRows, error) {
-	if stmt.mc.closed.Load() {
+func (stmt *mysqlStmt) query(args []driver.Value) (*binaryRows, error) {
+	if stmt.mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
-	var spanChild opentracing.Span
-	ctx, spanChild = stmt.mc.beginTracing(ctx, "stmt.query")
-	defer stmt.mc.finishTracing(spanChild)
 	// Send command
 	err := stmt.writeExecutePacket(args)
 	if err != nil {
@@ -169,7 +157,7 @@ func (c converter) ConvertValue(v interface{}) (driver.Value, error) {
 		if driver.IsValue(sv) {
 			return sv, nil
 		}
-		// A value returned from the Valuer interface can be "a type handled by
+		// A value returend from the Valuer interface can be "a type handled by
 		// a database driver's NamedValueChecker interface" so we should accept
 		// uint64 here as well.
 		if u, ok := sv.(uint64); ok {

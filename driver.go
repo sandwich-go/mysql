@@ -8,30 +8,25 @@
 //
 // The driver should be used via the database/sql package:
 //
-//	import "database/sql"
-//	import _ "github.com/go-sql-driver/mysql"
+//  import "database/sql"
+//  import _ "github.com/go-sql-driver/mysql"
 //
-//	db, err := sql.Open("mysql", "user:password@/dbname")
+//  db, err := sql.Open("mysql", "user:password@/dbname")
 //
 // See https://github.com/go-sql-driver/mysql#usage for details
 package mysql
 
 import (
-	"bitbucket.org/funplus/sandwich/pkg/logbus/monitor"
-	"bitbucket.org/funplus/sandwich/utils"
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"github.com/prometheus/client_golang/prometheus"
 	"net"
 	"sync"
 )
 
 // MySQLDriver is exported to make the driver directly accessible.
 // In general the driver is used via the database/sql package.
-type MySQLDriver struct {
-	latencyMetric *prometheus.SummaryVec
-}
+type MySQLDriver struct{}
 
 // DialFunc is a function which can be used to establish the network connection.
 // Custom dial functions must be registered with RegisterDial
@@ -80,29 +75,13 @@ func (d MySQLDriver) Open(dsn string) (driver.Conn, error) {
 		return nil, err
 	}
 	c := &connector{
-		cfg:           cfg,
-		latencyMetric: md.latencyMetric,
+		cfg: cfg,
 	}
-	registerCollector()
 	return c.Connect(context.Background())
 }
 
-var md = &MySQLDriver{latencyMetric: prometheus.NewSummaryVec(prometheus.SummaryOpts{
-	Name:       "mysql_connect_timing",
-	Objectives: utils.SummaryObjectives,
-	MaxAge:     utils.SummaryMaxAge,
-}, nil)}
-
-var once sync.Once
-
-func registerCollector() {
-	once.Do(func() {
-		monitor.RegisterCollector(md.latencyMetric)
-	})
-}
-
 func init() {
-	sql.Register("mysql", md)
+	sql.Register("mysql", &MySQLDriver{})
 }
 
 // NewConnector returns new driver.Connector.
@@ -113,8 +92,7 @@ func NewConnector(cfg *Config) (driver.Connector, error) {
 	if err := cfg.normalize(); err != nil {
 		return nil, err
 	}
-	registerCollector()
-	return &connector{cfg: cfg, latencyMetric: md.latencyMetric}, nil
+	return &connector{cfg: cfg}, nil
 }
 
 // OpenConnector implements driver.DriverContext.
@@ -123,9 +101,7 @@ func (d MySQLDriver) OpenConnector(dsn string) (driver.Connector, error) {
 	if err != nil {
 		return nil, err
 	}
-	registerCollector()
 	return &connector{
-		cfg:           cfg,
-		latencyMetric: md.latencyMetric,
+		cfg: cfg,
 	}, nil
 }

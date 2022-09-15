@@ -35,25 +35,26 @@ var (
 // Note: The provided tls.Config is exclusively owned by the driver after
 // registering it.
 //
-//	rootCertPool := x509.NewCertPool()
-//	pem, err := ioutil.ReadFile("/path/ca-cert.pem")
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-//	    log.Fatal("Failed to append PEM.")
-//	}
-//	clientCert := make([]tls.Certificate, 0, 1)
-//	certs, err := tls.LoadX509KeyPair("/path/client-cert.pem", "/path/client-key.pem")
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//	clientCert = append(clientCert, certs)
-//	mysql.RegisterTLSConfig("custom", &tls.Config{
-//	    RootCAs: rootCertPool,
-//	    Certificates: clientCert,
-//	})
-//	db, err := sql.Open("mysql", "user@tcp(localhost:3306)/test?tls=custom")
+//  rootCertPool := x509.NewCertPool()
+//  pem, err := ioutil.ReadFile("/path/ca-cert.pem")
+//  if err != nil {
+//      log.Fatal(err)
+//  }
+//  if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+//      log.Fatal("Failed to append PEM.")
+//  }
+//  clientCert := make([]tls.Certificate, 0, 1)
+//  certs, err := tls.LoadX509KeyPair("/path/client-cert.pem", "/path/client-key.pem")
+//  if err != nil {
+//      log.Fatal(err)
+//  }
+//  clientCert = append(clientCert, certs)
+//  mysql.RegisterTLSConfig("custom", &tls.Config{
+//      RootCAs: rootCertPool,
+//      Certificates: clientCert,
+//  })
+//  db, err := sql.Open("mysql", "user@tcp(localhost:3306)/test?tls=custom")
+//
 func RegisterTLSConfig(key string, config *tls.Config) error {
 	if _, isBool := readBool(key); isBool || strings.ToLower(key) == "skip-verify" || strings.ToLower(key) == "preferred" {
 		return fmt.Errorf("key '%s' is reserved", key)
@@ -198,7 +199,7 @@ func parseByteYear(b []byte) (int, error) {
 			return 0, err
 		}
 		year += v * n
-		n /= 10
+		n = n / 10
 	}
 	return year, nil
 }
@@ -541,7 +542,7 @@ func stringToInt(b []byte) int {
 	return val
 }
 
-// returns the string read as a bytes slice, whether the value is NULL,
+// returns the string read as a bytes slice, wheter the value is NULL,
 // the number of bytes read and an error, in case the string is longer than
 // the input slice
 func readLengthEncodedString(b []byte) ([]byte, bool, int, error) {
@@ -651,32 +652,32 @@ func escapeBytesBackslash(buf, v []byte) []byte {
 	for _, c := range v {
 		switch c {
 		case '\x00':
-			buf[pos+1] = '0'
 			buf[pos] = '\\'
+			buf[pos+1] = '0'
 			pos += 2
 		case '\n':
-			buf[pos+1] = 'n'
 			buf[pos] = '\\'
+			buf[pos+1] = 'n'
 			pos += 2
 		case '\r':
-			buf[pos+1] = 'r'
 			buf[pos] = '\\'
+			buf[pos+1] = 'r'
 			pos += 2
 		case '\x1a':
-			buf[pos+1] = 'Z'
 			buf[pos] = '\\'
+			buf[pos+1] = 'Z'
 			pos += 2
 		case '\'':
-			buf[pos+1] = '\''
 			buf[pos] = '\\'
+			buf[pos+1] = '\''
 			pos += 2
 		case '"':
-			buf[pos+1] = '"'
 			buf[pos] = '\\'
+			buf[pos+1] = '"'
 			pos += 2
 		case '\\':
-			buf[pos+1] = '\\'
 			buf[pos] = '\\'
+			buf[pos+1] = '\\'
 			pos += 2
 		default:
 			buf[pos] = c
@@ -696,32 +697,32 @@ func escapeStringBackslash(buf []byte, v string) []byte {
 		c := v[i]
 		switch c {
 		case '\x00':
-			buf[pos+1] = '0'
 			buf[pos] = '\\'
+			buf[pos+1] = '0'
 			pos += 2
 		case '\n':
-			buf[pos+1] = 'n'
 			buf[pos] = '\\'
+			buf[pos+1] = 'n'
 			pos += 2
 		case '\r':
-			buf[pos+1] = 'r'
 			buf[pos] = '\\'
+			buf[pos+1] = 'r'
 			pos += 2
 		case '\x1a':
-			buf[pos+1] = 'Z'
 			buf[pos] = '\\'
+			buf[pos+1] = 'Z'
 			pos += 2
 		case '\'':
-			buf[pos+1] = '\''
 			buf[pos] = '\\'
+			buf[pos+1] = '\''
 			pos += 2
 		case '"':
-			buf[pos+1] = '"'
 			buf[pos] = '\\'
+			buf[pos+1] = '"'
 			pos += 2
 		case '\\':
-			buf[pos+1] = '\\'
 			buf[pos] = '\\'
+			buf[pos+1] = '\\'
 			pos += 2
 		default:
 			buf[pos] = c
@@ -743,8 +744,8 @@ func escapeBytesQuotes(buf, v []byte) []byte {
 
 	for _, c := range v {
 		if c == '\'' {
-			buf[pos+1] = '\''
 			buf[pos] = '\''
+			buf[pos+1] = '\''
 			pos += 2
 		} else {
 			buf[pos] = c
@@ -763,8 +764,8 @@ func escapeStringQuotes(buf []byte, v string) []byte {
 	for i := 0; i < len(v); i++ {
 		c := v[i]
 		if c == '\'' {
-			buf[pos+1] = '\''
 			buf[pos] = '\''
+			buf[pos+1] = '\''
 			pos += 2
 		} else {
 			buf[pos] = c
@@ -789,16 +790,39 @@ type noCopy struct{}
 // Lock is a no-op used by -copylocks checker from `go vet`.
 func (*noCopy) Lock() {}
 
-// Unlock is a no-op used by -copylocks checker from `go vet`.
-// noCopy should implement sync.Locker from Go 1.11
-// https://github.com/golang/go/commit/c2eba53e7f80df21d51285879d51ab81bcfbf6bc
-// https://github.com/golang/go/issues/26165
-func (*noCopy) Unlock() {}
+// atomicBool is a wrapper around uint32 for usage as a boolean value with
+// atomic access.
+type atomicBool struct {
+	_noCopy noCopy
+	value   uint32
+}
+
+// IsSet returns whether the current boolean value is true
+func (ab *atomicBool) IsSet() bool {
+	return atomic.LoadUint32(&ab.value) > 0
+}
+
+// Set sets the value of the bool regardless of the previous value
+func (ab *atomicBool) Set(value bool) {
+	if value {
+		atomic.StoreUint32(&ab.value, 1)
+	} else {
+		atomic.StoreUint32(&ab.value, 0)
+	}
+}
+
+// TrySet sets the value of the bool and returns whether the value changed
+func (ab *atomicBool) TrySet(value bool) bool {
+	if value {
+		return atomic.SwapUint32(&ab.value, 1) == 0
+	}
+	return atomic.SwapUint32(&ab.value, 0) > 0
+}
 
 // atomicError is a wrapper for atomically accessed error values
 type atomicError struct {
-	_     noCopy
-	value atomic.Value
+	_noCopy noCopy
+	value   atomic.Value
 }
 
 // Set sets the error value regardless of the previous value.
@@ -826,6 +850,16 @@ func namedValueToValue(named []driver.NamedValue) ([]driver.Value, error) {
 		dargs[n] = param.Value
 	}
 	return dargs, nil
+}
+
+func checkNamedValue(named []driver.NamedValue) error {
+	for _, param := range named {
+		if len(param.Name) > 0 {
+			// TODO: support the use of Named Parameters #561
+			return errors.New("mysql: driver does not support the use of Named Parameters")
+		}
+	}
+	return nil
 }
 
 func mapIsolationLevel(level driver.IsolationLevel) (string, error) {

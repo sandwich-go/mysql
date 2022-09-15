@@ -62,7 +62,6 @@ type Config struct {
 	MultiStatements         bool // Allow multiple statements in one query
 	ParseTime               bool // Parse time values to time.Time
 	RejectReadOnly          bool // Reject read-only connections
-	OpenTracing             bool
 }
 
 // NewConfig creates a new Config and sets default values.
@@ -273,10 +272,6 @@ func (cfg *Config) FormatDSN() string {
 		writeDSNParam(&buf, &hasParam, "maxAllowedPacket", strconv.Itoa(cfg.MaxAllowedPacket))
 	}
 
-	if cfg.OpenTracing {
-		writeDSNParam(&buf, &hasParam, "openTracing", "true")
-	}
-
 	// other params
 	if cfg.Params != nil {
 		var params []string
@@ -431,6 +426,7 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 		// Collation
 		case "collation":
 			cfg.Collation = value
+			break
 
 		case "columnsWithAlias":
 			var isBool bool
@@ -540,12 +536,6 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 			cfg.MaxAllowedPacket, err = strconv.Atoi(value)
 			if err != nil {
 				return
-			}
-		case "openTracing":
-			var isBool bool
-			cfg.OpenTracing, isBool = readBool(value)
-			if !isBool {
-				return errors.New("invalid bool value: " + value)
 			}
 		default:
 			// lazy init

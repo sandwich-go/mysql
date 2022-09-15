@@ -13,8 +13,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
-	"fmt"
-	"github.com/opentracing/opentracing-go"
 	"io"
 	"net"
 	"strconv"
@@ -48,11 +46,7 @@ type mysqlConn struct {
 }
 
 // Handles parameters set in DSN after the connection is established
-func (mc *mysqlConn) handleParams(ctx context.Context) (err error) {
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.handleParams")
-	defer mc.finishTracing(spanChild)
-
+func (mc *mysqlConn) handleParams() (err error) {
 	var cmdSet strings.Builder
 	for param, val := range mc.cfg.Params {
 		switch param {
@@ -61,7 +55,7 @@ func (mc *mysqlConn) handleParams(ctx context.Context) (err error) {
 			charsets := strings.Split(val, ",")
 			for i := range charsets {
 				// ignore errors here - a charset may not exist
-				err = mc.exec(ctx, "SET NAMES "+charsets[i])
+				err = mc.exec("SET NAMES " + charsets[i])
 				if err == nil {
 					break
 				}
@@ -86,7 +80,7 @@ func (mc *mysqlConn) handleParams(ctx context.Context) (err error) {
 	}
 
 	if cmdSet.Len() > 0 {
-		err = mc.exec(ctx, cmdSet.String())
+		err = mc.exec(cmdSet.String())
 		if err != nil {
 			return
 		}
@@ -106,24 +100,21 @@ func (mc *mysqlConn) markBadConn(err error) error {
 }
 
 func (mc *mysqlConn) Begin() (driver.Tx, error) {
-	return mc.begin(context.Background(), false)
+	return mc.begin(false)
 }
 
-func (mc *mysqlConn) begin(ctx context.Context, readOnly bool) (driver.Tx, error) {
-	if mc.closed.Load() {
+func (mc *mysqlConn) begin(readOnly bool) (driver.Tx, error) {
+	if mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.begin")
-	defer mc.finishTracing(spanChild)
 	var q string
 	if readOnly {
 		q = "START TRANSACTION READ ONLY"
 	} else {
 		q = "START TRANSACTION"
 	}
-	err := mc.exec(ctx, q)
+	err := mc.exec(q)
 	if err == nil {
 		return &mysqlTx{mc}, err
 	}
@@ -132,7 +123,7 @@ func (mc *mysqlConn) begin(ctx context.Context, readOnly bool) (driver.Tx, error
 
 func (mc *mysqlConn) Close() (err error) {
 	// Makes Close idempotent
-	if !mc.closed.Load() {
+	if !mc.closed.IsSet() {
 		err = mc.writeCommandPacket(comQuit)
 	}
 
@@ -146,7 +137,7 @@ func (mc *mysqlConn) Close() (err error) {
 // is called before auth or on auth failure because MySQL will have already
 // closed the network connection.
 func (mc *mysqlConn) cleanup() {
-	if mc.closed.Swap(true) {
+	if !mc.closed.TrySet(true) {
 		return
 	}
 
@@ -161,7 +152,7 @@ func (mc *mysqlConn) cleanup() {
 }
 
 func (mc *mysqlConn) error() error {
-	if mc.closed.Load() {
+	if mc.closed.IsSet() {
 		if err := mc.canceled.Value(); err != nil {
 			return err
 		}
@@ -170,15 +161,8 @@ func (mc *mysqlConn) error() error {
 	return nil
 }
 
-func (mc *mysqlConn) prepare(ctx context.Context, query string) (driver.Stmt, error) {
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.prepare")
-	defer mc.finishTracing(spanChild)
-	return mc.Prepare(query)
-}
-
 func (mc *mysqlConn) Prepare(query string) (driver.Stmt, error) {
-	if mc.closed.Load() {
+	if mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
@@ -211,33 +195,9 @@ func (mc *mysqlConn) Prepare(query string) (driver.Stmt, error) {
 	return stmt, err
 }
 
-func (mc *mysqlConn) beginTracing(ctx context.Context, operationName string) (context.Context, opentracing.Span) {
-	return mc.beginTracingWithTags(ctx, operationName, nil)
-}
-
-func (mc *mysqlConn) beginTracingWithTags(ctx context.Context, operationName string, tags map[string]interface{}) (context.Context, opentracing.Span) {
-	var spanChild opentracing.Span
-	if mc.cfg != nil && mc.cfg.OpenTracing {
-		if span := opentracing.SpanFromContext(ctx); span != nil {
-			spanChild = opentracing.GlobalTracer().StartSpan(operationName, opentracing.ChildOf(span.Context()))
-			for k, v := range tags {
-				spanChild.SetTag(k, v)
-			}
-			ctx = opentracing.ContextWithSpan(ctx, spanChild)
-		}
-	}
-	return ctx, spanChild
-}
-
-func (mc *mysqlConn) finishTracing(spanChild opentracing.Span) {
-	if spanChild != nil {
-		spanChild.Finish()
-	}
-}
-
-func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (string, error) {
+func (mc *mysqlConn) interpolateParams(query string, argsLen int, getArg func(int) driver.Value) (string, error) {
 	// Number of ? should be same to len(args)
-	if strings.Count(query, "?") != len(args) {
+	if strings.Count(query, "?") != argsLen {
 		return "", driver.ErrSkip
 	}
 
@@ -259,7 +219,7 @@ func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (strin
 		buf = append(buf, query[i:i+q]...)
 		i += q
 
-		arg := args[argPos]
+		arg := getArg(argPos)
 		argPos++
 
 		if arg == nil {
@@ -328,30 +288,23 @@ func (mc *mysqlConn) interpolateParams(query string, args []driver.Value) (strin
 			return "", driver.ErrSkip
 		}
 	}
-	if argPos != len(args) {
+	if argPos != argsLen {
 		return "", driver.ErrSkip
 	}
 	return string(buf), nil
 }
 
-func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, error) {
-	return mc.interExec(context.Background(), query, args)
-}
-
-func (mc *mysqlConn) interExec(ctx context.Context, query string, args []driver.Value) (driver.Result, error) {
-	if mc.closed.Load() {
+func (mc *mysqlConn) execQuery(query string, argsLen int, getArg func(int) driver.Value) (driver.Result, error) {
+	if mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.query")
-	defer mc.finishTracing(spanChild)
-	if len(args) != 0 {
+	if argsLen != 0 {
 		if !mc.cfg.InterpolateParams {
 			return nil, driver.ErrSkip
 		}
 		// try to interpolate the parameters to save extra roundtrips for preparing and closing a statement
-		prepared, err := mc.interpolateParams(query, args)
+		prepared, err := mc.interpolateParams(query, argsLen, getArg)
 		if err != nil {
 			return nil, err
 		}
@@ -360,15 +313,7 @@ func (mc *mysqlConn) interExec(ctx context.Context, query string, args []driver.
 	mc.affectedRows = 0
 	mc.insertId = 0
 
-	ctx, spanChild = mc.beginTracing(ctx, "conn.exec")
-	err := mc.exec(ctx, query)
-	ctime := time.Now().UnixNano()
-	if spanChild != nil {
-		spanChild.SetTag("server_send_time", fmt.Sprintf("%d", mc.affectedRows))
-		spanChild.SetTag("client_rev_time", fmt.Sprintf("%d", ctime))
-		spanChild.SetTag("duration_time", fmt.Sprintf("%d", ctime-int64(mc.affectedRows)))
-	}
-	mc.finishTracing(spanChild)
+	err := mc.exec(query)
 	if err == nil {
 		return &mysqlResult{
 			affectedRows: int64(mc.affectedRows),
@@ -378,69 +323,53 @@ func (mc *mysqlConn) interExec(ctx context.Context, query string, args []driver.
 	return nil, mc.markBadConn(err)
 }
 
-// Internal function to execute commands
-func (mc *mysqlConn) exec(ctx context.Context, query string) error {
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.inner")
-	defer mc.finishTracing(spanChild)
+func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, error) {
+	return mc.execQuery(query, len(args), func(i int) driver.Value { return args[i] })
+}
 
+// Internal function to execute commands
+func (mc *mysqlConn) exec(query string) error {
 	// Send command
-	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.writeCommandPacketStr")
-	err0 := mc.writeCommandPacketStr(comQuery, query)
-	mc.finishTracing(spanChild)
-	if err0 != nil {
-		return mc.markBadConn(err0)
+	if err := mc.writeCommandPacketStr(comQuery, query); err != nil {
+		return mc.markBadConn(err)
 	}
 
-	// Read Result]
-	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.readResultSetHeaderPacket")
+	// Read Result
 	resLen, err := mc.readResultSetHeaderPacket()
-	mc.finishTracing(spanChild)
 	if err != nil {
 		return err
 	}
 
 	if resLen > 0 {
 		// columns
-		ctx, spanChild = mc.beginTracing(ctx, "conn.exec.readColumns")
-		err = mc.readUntilEOF()
-		mc.finishTracing(spanChild)
-		if err != nil {
+		if err := mc.readUntilEOF(); err != nil {
 			return err
 		}
 
 		// rows
-		ctx, spanChild = mc.beginTracing(ctx, "conn.exec.readRows")
-		err = mc.readUntilEOF()
-		mc.finishTracing(spanChild)
-		if err != nil {
+		if err := mc.readUntilEOF(); err != nil {
 			return err
 		}
 	}
-	ctx, spanChild = mc.beginTracing(ctx, "conn.exec.discardResults")
-	err = mc.discardResults()
-	mc.finishTracing(spanChild)
-	return err
+
+	return mc.discardResults()
 }
 
 func (mc *mysqlConn) Query(query string, args []driver.Value) (driver.Rows, error) {
-	return mc.query(context.Background(), query, args)
+	return mc.query(query, len(args), func(i int) driver.Value { return args[i] })
 }
 
-func (mc *mysqlConn) query(ctx context.Context, query string, args []driver.Value) (*textRows, error) {
-	if mc.closed.Load() {
+func (mc *mysqlConn) query(query string, argsLen int, getArg func(int) driver.Value) (*textRows, error) {
+	if mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.query")
-	defer mc.finishTracing(spanChild)
-	if len(args) != 0 {
+	if argsLen != 0 {
 		if !mc.cfg.InterpolateParams {
 			return nil, driver.ErrSkip
 		}
 		// try client-side prepare to reduce roundtrip
-		prepared, err := mc.interpolateParams(query, args)
+		prepared, err := mc.interpolateParams(query, argsLen, getArg)
 		if err != nil {
 			return nil, err
 		}
@@ -477,10 +406,7 @@ func (mc *mysqlConn) query(ctx context.Context, query string, args []driver.Valu
 
 // Gets the value of the given MySQL System Variable
 // The returned byte slice is only valid until the next read
-func (mc *mysqlConn) getSystemVar(ctx context.Context, name string) ([]byte, error) {
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.getSystemVar")
-	defer mc.finishTracing(spanChild)
+func (mc *mysqlConn) getSystemVar(name string) ([]byte, error) {
 	// Send command
 	if err := mc.writeCommandPacketStr(comQuery, "SELECT @@"+name); err != nil {
 		return nil, err
@@ -528,13 +454,10 @@ func (mc *mysqlConn) finish() {
 
 // Ping implements driver.Pinger interface
 func (mc *mysqlConn) Ping(ctx context.Context) (err error) {
-	if mc.closed.Load() {
+	if mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return driver.ErrBadConn
 	}
-	var spanChild opentracing.Span
-	ctx, spanChild = mc.beginTracing(ctx, "conn.ping")
-	defer mc.finishTracing(spanChild)
 
 	if err = mc.watchCancel(ctx); err != nil {
 		return
@@ -550,7 +473,7 @@ func (mc *mysqlConn) Ping(ctx context.Context) (err error) {
 
 // BeginTx implements driver.ConnBeginTx interface
 func (mc *mysqlConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	if mc.closed.Load() {
+	if mc.closed.IsSet() {
 		return nil, driver.ErrBadConn
 	}
 
@@ -564,26 +487,25 @@ func (mc *mysqlConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver
 		if err != nil {
 			return nil, err
 		}
-		err = mc.exec(ctx, "SET TRANSACTION ISOLATION LEVEL "+level)
+		err = mc.exec("SET TRANSACTION ISOLATION LEVEL " + level)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return mc.begin(ctx, opts.ReadOnly)
+	return mc.begin(opts.ReadOnly)
 }
 
 func (mc *mysqlConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	dargs, err := namedValueToValue(args)
+	err := checkNamedValue(args)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := mc.watchCancel(ctx); err != nil {
+	if err = mc.watchCancel(ctx); err != nil {
 		return nil, err
 	}
 
-	rows, err := mc.query(ctx, query, dargs)
+	rows, err := mc.query(query, len(args), func(i int) driver.Value { return args[i].Value })
 	if err != nil {
 		mc.finish()
 		return nil, err
@@ -593,17 +515,16 @@ func (mc *mysqlConn) QueryContext(ctx context.Context, query string, args []driv
 }
 
 func (mc *mysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	dargs, err := namedValueToValue(args)
+	err := checkNamedValue(args)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := mc.watchCancel(ctx); err != nil {
+	if err = mc.watchCancel(ctx); err != nil {
 		return nil, err
 	}
 	defer mc.finish()
 
-	return mc.interExec(ctx, query, dargs)
+	return mc.execQuery(query, len(args), func(i int) driver.Value { return args[i].Value })
 }
 
 func (mc *mysqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
@@ -611,7 +532,7 @@ func (mc *mysqlConn) PrepareContext(ctx context.Context, query string) (driver.S
 		return nil, err
 	}
 
-	stmt, err := mc.prepare(ctx, query)
+	stmt, err := mc.Prepare(query)
 	mc.finish()
 	if err != nil {
 		return nil, err
@@ -632,11 +553,11 @@ func (stmt *mysqlStmt) QueryContext(ctx context.Context, args []driver.NamedValu
 		return nil, err
 	}
 
-	if err := stmt.mc.watchCancel(ctx); err != nil {
+	if err = stmt.mc.watchCancel(ctx); err != nil {
 		return nil, err
 	}
 
-	rows, err := stmt.query(ctx, dargs)
+	rows, err := stmt.query(dargs)
 	if err != nil {
 		stmt.mc.finish()
 		return nil, err
@@ -656,7 +577,7 @@ func (stmt *mysqlStmt) ExecContext(ctx context.Context, args []driver.NamedValue
 	}
 	defer stmt.mc.finish()
 
-	return stmt.exec(ctx, dargs)
+	return stmt.Exec(dargs)
 }
 
 func (mc *mysqlConn) watchCancel(ctx context.Context) error {
@@ -717,7 +638,7 @@ func (mc *mysqlConn) CheckNamedValue(nv *driver.NamedValue) (err error) {
 // ResetSession implements driver.SessionResetter.
 // (From Go 1.10)
 func (mc *mysqlConn) ResetSession(ctx context.Context) error {
-	if mc.closed.Load() {
+	if mc.closed.IsSet() {
 		return driver.ErrBadConn
 	}
 	mc.reset = true
@@ -727,5 +648,5 @@ func (mc *mysqlConn) ResetSession(ctx context.Context) error {
 // IsValid implements driver.Validator interface
 // (From Go 1.15)
 func (mc *mysqlConn) IsValid() bool {
-	return !mc.closed.Load()
+	return !mc.closed.IsSet()
 }
