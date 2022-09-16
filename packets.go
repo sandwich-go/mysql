@@ -35,7 +35,7 @@ func (mc *mysqlConn) readPacket() ([]byte, error) {
 				return nil, cerr
 			}
 			errLog.Print(err)
-			mc.Close()
+			_ = mc.Close()
 			return nil, ErrInvalidConn
 		}
 
@@ -57,7 +57,7 @@ func (mc *mysqlConn) readPacket() ([]byte, error) {
 			// there was no previous packet
 			if prevData == nil {
 				errLog.Print(ErrMalformPkt)
-				mc.Close()
+				_ = mc.Close()
 				return nil, ErrInvalidConn
 			}
 
@@ -71,7 +71,7 @@ func (mc *mysqlConn) readPacket() ([]byte, error) {
 				return nil, cerr
 			}
 			errLog.Print(err)
-			mc.Close()
+			_ = mc.Close()
 			return nil, ErrInvalidConn
 		}
 
@@ -121,7 +121,7 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 		}
 		if err != nil {
 			errLog.Print("closing bad idle connection: ", err)
-			mc.Close()
+			_ = mc.Close()
 			return driver.ErrBadConn
 		}
 	}
@@ -584,7 +584,7 @@ func (mc *mysqlConn) handleErrorPacket(data []byte) error {
 		// We explicitly close the connection before returning
 		// driver.ErrBadConn to ensure that `database/sql` purges this
 		// connection and initiates a new one for next statement next time.
-		mc.Close()
+		_ = mc.Close()
 		return driver.ErrBadConn
 	}
 
@@ -906,11 +906,11 @@ func (stmt *mysqlStmt) writeCommandLongData(paramID int, arg []byte) error {
 
 // Execute Prepared Statement
 // http://dev.mysql.com/doc/internals/en/com-stmt-execute.html
-func (stmt *mysqlStmt) writeExecutePacket(args []driver.Value) error {
-	if len(args) != stmt.paramCount {
+func (stmt *mysqlStmt) writeExecutePacket(argsLen int, getArgByIndex getArgByIndex) error {
+	if argsLen != stmt.paramCount {
 		return fmt.Errorf(
 			"argument count mismatch (got: %d; has: %d)",
-			len(args),
+			argsLen,
 			stmt.paramCount,
 		)
 	}
@@ -930,7 +930,7 @@ func (stmt *mysqlStmt) writeExecutePacket(args []driver.Value) error {
 	var data []byte
 	var err error
 
-	if len(args) == 0 {
+	if argsLen == 0 {
 		data, err = mc.buf.takeBuffer(minPktLen)
 	} else {
 		data, err = mc.buf.takeCompleteBuffer()
@@ -960,11 +960,11 @@ func (stmt *mysqlStmt) writeExecutePacket(args []driver.Value) error {
 	data[12] = 0x00
 	data[13] = 0x00
 
-	if len(args) > 0 {
+	if argsLen > 0 {
 		pos := minPktLen
 
 		var nullMask []byte
-		if maskLen, typesLen := (len(args)+7)/8, 1+2*len(args); pos+maskLen+typesLen >= cap(data) {
+		if maskLen, typesLen := (argsLen+7)/8, 1+2*argsLen; pos+maskLen+typesLen >= cap(data) {
 			// buffer has to be extended but we don't know by how much so
 			// we depend on append after all data with known sizes fit.
 			// We stop at that because we deal with a lot of columns here
@@ -989,13 +989,14 @@ func (stmt *mysqlStmt) writeExecutePacket(args []driver.Value) error {
 
 		// type of each parameter [len(args)*2 bytes]
 		paramTypes := data[pos:]
-		pos += len(args) * 2
+		pos += argsLen * 2
 
 		// value of each parameter [n bytes]
 		paramValues := data[pos:pos]
 		valuesCap := cap(paramValues)
 
-		for i, arg := range args {
+		for i := 0; i < argsLen; i++ {
+			arg := getArgByIndex(i)
 			// build NULL-bitmap
 			if arg == nil {
 				nullMask[i/8] |= 1 << (uint(i) & 7)

@@ -62,6 +62,7 @@ type Config struct {
 	MultiStatements         bool // Allow multiple statements in one query
 	ParseTime               bool // Parse time values to time.Time
 	RejectReadOnly          bool // Reject read-only connections
+	OpenTracing             bool // Allows open tracing
 }
 
 // NewConfig creates a new Config and sets default values.
@@ -252,6 +253,10 @@ func (cfg *Config) FormatDSN() string {
 		writeDSNParam(&buf, &hasParam, "rejectReadOnly", "true")
 	}
 
+	if cfg.OpenTracing {
+		writeDSNParam(&buf, &hasParam, "openTracing", "true")
+	}
+
 	if len(cfg.ServerPubKey) > 0 {
 		writeDSNParam(&buf, &hasParam, "serverPubKey", url.QueryEscape(cfg.ServerPubKey))
 	}
@@ -411,6 +416,14 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 		case "checkConnLiveness":
 			var isBool bool
 			cfg.CheckConnLiveness, isBool = readBool(value)
+			if !isBool {
+				return errors.New("invalid bool value: " + value)
+			}
+
+			// open tracing before using them
+		case "openTracing":
+			var isBool bool
+			cfg.OpenTracing, isBool = readBool(value)
 			if !isBool {
 				return errors.New("invalid bool value: " + value)
 			}

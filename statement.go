@@ -40,7 +40,7 @@ func (stmt *mysqlStmt) NumInput() int {
 	return stmt.paramCount
 }
 
-func (stmt *mysqlStmt) ColumnConverter(idx int) driver.ValueConverter {
+func (stmt *mysqlStmt) ColumnConverter(_ int) driver.ValueConverter {
 	return converter{}
 }
 
@@ -49,13 +49,13 @@ func (stmt *mysqlStmt) CheckNamedValue(nv *driver.NamedValue) (err error) {
 	return
 }
 
-func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
+func (stmt *mysqlStmt) exec(argsLen int, getArgByIndex getArgByIndex) (driver.Result, error) {
 	if stmt.mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
 	// Send command
-	err := stmt.writeExecutePacket(args)
+	err := stmt.writeExecutePacket(argsLen, getArgByIndex)
 	if err != nil {
 		return nil, stmt.mc.markBadConn(err)
 	}
@@ -66,9 +66,9 @@ func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
 	mc.insertId = 0
 
 	// Read Result
-	resLen, err := mc.readResultSetHeaderPacket()
-	if err != nil {
-		return nil, err
+	resLen, err1 := mc.readResultSetHeaderPacket()
+	if err1 != nil {
+		return nil, err1
 	}
 
 	if resLen > 0 {
@@ -78,12 +78,12 @@ func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
 		}
 
 		// Rows
-		if err := mc.readUntilEOF(); err != nil {
+		if err = mc.readUntilEOF(); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := mc.discardResults(); err != nil {
+	if err = mc.discardResults(); err != nil {
 		return nil, err
 	}
 
@@ -93,17 +93,21 @@ func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
 	}, nil
 }
 
-func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return stmt.query(args)
+func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
+	return stmt.exec(len(args), func(i int) driver.Value { return args[i] })
 }
 
-func (stmt *mysqlStmt) query(args []driver.Value) (*binaryRows, error) {
+func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {
+	return stmt.query(len(args), func(i int) driver.Value { return args[i] })
+}
+
+func (stmt *mysqlStmt) query(argsLen int, getArgByIndex getArgByIndex) (*binaryRows, error) {
 	if stmt.mc.closed.IsSet() {
 		errLog.Print(ErrInvalidConn)
 		return nil, driver.ErrBadConn
 	}
 	// Send command
-	err := stmt.writeExecutePacket(args)
+	err := stmt.writeExecutePacket(argsLen, getArgByIndex)
 	if err != nil {
 		return nil, stmt.mc.markBadConn(err)
 	}
@@ -111,9 +115,9 @@ func (stmt *mysqlStmt) query(args []driver.Value) (*binaryRows, error) {
 	mc := stmt.mc
 
 	// Read Result
-	resLen, err := mc.readResultSetHeaderPacket()
-	if err != nil {
-		return nil, err
+	resLen, err1 := mc.readResultSetHeaderPacket()
+	if err1 != nil {
+		return nil, err1
 	}
 
 	rows := new(binaryRows)

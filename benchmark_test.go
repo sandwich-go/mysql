@@ -238,7 +238,9 @@ func BenchmarkInterpolation(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := mc.interpolateParams(q, args)
+		_, err := mc.interpolateParams(q, len(args), func(j int) driver.Value {
+			return args[j]
+		})
 		if err != nil {
 			b.Fatal(err)
 		}
